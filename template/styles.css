@@ -1,0 +1,67 @@
+.main-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, 200px);
+    justify-content: center;
+    width: 100%;
+}
+
+.panel {
+    overflow: clip;
+    background: rgb(245, 235, 255);
+    text-align: center;
+    margin: 5px 5px 5px 5px;
+    padding: 0px 5px 5px 5px;
+    display: grid;
+}
+
+.header {
+    overflow: clip;
+    background: rgb(245, 255, 245);
+    padding: 5px 5px 5px 5px;
+    font-size: 24px;
+    border-bottom: 1px solid black;
+}
+
+.element {
+    overflow: clip;
+    border-bottom: 1px solid black;
+    display: flex;
+    flex-direction: row;
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+}
+
+.bookmark {
+    text-align: center;
+    width: 80%;
+}
+
+.hint {
+    text-align: center;
+    width: 20%;
+    background: rgb(255, 245, 245);
+    padding: 2px 2px 2px 2px;
+    margin: 2px 2px 2px 2px;
+    border: 1px solid black;
+    display: flex;
+    flex-direction: row;
+    text-align: center;
+    align-items: center;
+    justify-content: center;
+}
+
+.highlight {
+    color: rgb(255, 0, 0);
+}
+
+.clock {
+    font-size: 55px;
+    text-align: center;
+    width: 100%;
+}
+
+body {
+    background-image: url("background.jpg");
+    background-size: cover;
+}
