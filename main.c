@@ -68,77 +68,112 @@ int is_valid_link(char* link) {
     return 1;
 }
 
-Database* process_database(char* name) {
-    // check if database is marked for homepage
+void process_database(Database * db) {
     char command[STRING_CAPACITY] = {0};
-    strcpy(command, "bookkeeper -o -a homepage_mark -d ");
-    strcat(command, name);
-    FILE* mark = popen(command, "r");
-    if (mark == NULL) {
-        return NULL;
-    }
-    // zero return means we have a homepage mark
-    if (pclose(mark)) {
-        return NULL;
+
+    {
+        // check if database is marked for homepage
+        strcpy(command, "bookkeeper -o -a homepage_mark -d ");
+        strcat(command, db->label);
+        FILE* mark = popen(command, "r");
+        if (mark == NULL) {
+            fprintf(stderr, "ERROR: could not open bookkeeper\n");
+            return;
+        }
+
+        // zero return means we have a homepage mark
+        int status = pclose(mark);
+        if (errno) {
+            fprintf(stderr, "WARNING: database %s is not marked and error is %s %d\n", db->label, strerror(errno), status);
+            return;
+        }
     }
 
-    // iterate over marked database and get all aliased fields
-    strcpy(command, "bookkeeper -C -d ");
-    strcat(command, name);
-    FILE* aliases = popen(command, "r");
-    if (aliases == NULL) {
-        return NULL;
+    {
+        // iterate over marked database and get all aliased fields
+        strcpy(command, "bookkeeper -C -d ");
+        strcat(command, db->label);
+        FILE* aliases = popen(command, "r");
+        if (aliases == NULL) {
+            return;
+        }
+
+        // iterate over aliased fields and get all fields that are http links
+        db->cap = 20;
+        db->entries = malloc(sizeof(Entry*) * 20);
+        memset(db->entries, 0, sizeof(Entry*) * 20);
+
+        char alias[STRING_CAPACITY] = {0};
+        while (fgets(alias, STRING_CAPACITY, aliases) != NULL) {
+            size_t len = strlen(alias);
+            if (alias[len-1] == '\n')
+                alias[len-1] = '\0';
+            if (strcmp(alias, "homepage_mark") == 0) {
+                continue;
+            }
+            Entry* entry = malloc(sizeof(Entry));
+            memset(entry, 0, sizeof(Entry));
+            strcpy(entry->alias, alias);
+
+            if(db->len == db->cap) {
+                db->cap *= 2;
+                Entry** new = malloc(sizeof(Entry*) * db->cap);
+                memcpy(new, db->entries, sizeof(Entry*) * db->len);
+                memset(new + db->len, 0, sizeof(Entry*) * db->len);
+                free(db->entries);
+                db->entries = new;
+            }
+            db->entries[db->len] = entry;
+            db->len ++;
+        }
+        pclose(aliases);
     }
 
-    // iterate over aliased fields and get all fields that are http links
-    char alias[STRING_CAPACITY] = {0};
-    Database* result = malloc(sizeof(Database));
-    memset(result, 0, sizeof(Database));
-    strcpy(result->label, name);
-    result->cap = 20;
-    result->entries = malloc(sizeof(Entry*) * 20);
-    memset(result->entries, 0, sizeof(Entry*) * 20);
-
-    while (fgets(alias, STRING_CAPACITY - 1, aliases) != NULL) {
-        // add aliases and links to the index file
+    for (size_t i = 0; i < db->len; i++) {
         strcpy(command, "bookkeeper -o -a ");
-        strcat(command, alias);
+        strcat(command, db->entries[i]->alias);
         strcat(command, " -d ");
-        strcat(command, name);
+        strcat(command, db->label);
+
         FILE* get_value = popen(command, "r");
         if (get_value == NULL) {
-            continue;
+            fprintf(stderr, "WARNING: failed to read alias %s\n", db->entries[i]->alias);
+            goto remove;
         }
         char value[STRING_CAPACITY] = {0};
 
-        if (fgets(value, STRING_CAPACITY - 1, get_value) != NULL) {
+        if (fgets(value, STRING_CAPACITY, get_value) != NULL) {
+            size_t len = strlen(value);
+            if (value[len-1] == '\n')
+                value[len-1] = '\0';
+
             if(is_valid_link(value)) {
-                Entry* entry = malloc(sizeof(Entry));
-                memset(entry, 0, sizeof(Entry));
-                strcpy(entry->link, value);
-                strcpy(entry->alias, alias);
-                if(result->len == result->cap) {
-                    result->cap *= 2;
-                    Entry** new = malloc(sizeof(Entry*) * result->cap);
-                    memcpy(new, result->entries, sizeof(Entry*) * result->len);
-                    memset(new + result->len, 0, sizeof(Entry*) * result->len);
-                    free(result->entries);
-                    result->entries = new;
-                }
-                result->entries[result->len] = entry;
-                result->len ++;
+                strcpy(db->entries[i]->link, value);
+            } else {
+                fprintf(stderr,
+                        "WARNING: Alias '%s' holds data that isn't a valid link: %s\n",
+                        db->entries[i]->alias, value);
+                goto remove;
             }
         }
+
+        pclose(get_value);
+        continue;
+
+        remove:
+        free(db->entries[i]);
+        for (size_t r = i; r < db->len; r++) {
+            db->entries[r] = db->entries[r+1];
+        }
+        db->len --;
+        i --;
         pclose(get_value);
     }
 
-    pclose(aliases);
-    if(result->len) {
-        return result;
-    } else {
-        free(result->entries);
-        free(result);
-        return NULL;
+    if(db->len == 0) {
+        free(db->entries);
+        db->entries = NULL;
+        db->cap = 0;
     }
 }
 
@@ -217,7 +252,7 @@ void assign_hotkeys_to_entries(Node* node) {
             ptr = ptr->parent;
             len++;
         }
-        while (len-- > 0) {
+        while (len --> 0) {
             char_cat(node->entry->hotkey, chain[len]->value);
         }
     }
@@ -270,12 +305,15 @@ void build_elements(Databases dbs, FILE* index) {
             write_text(index, "          ");
             write_text(index, ent->hotkey);
             write_new_line(index);
+            write_text(index, "        </div>");
+            write_new_line(index);
 
-            write_text(index, "      <a class=\"bookmark\" href=\"");
+            write_text(index, "        <a class=\"bookmark\" href=\"");
             write_text(index, ent->link);
             write_text(index, "\">");
             write_text(index, ent->alias);
             write_text(index, "</a>\n");
+            write_line(index, "      </div>");
             free(ent);
         }
         write_line(index, "    </div>");
@@ -298,47 +336,56 @@ void build_containers(FILE* index) {
     memset(container.bases, 0, sizeof(Database*) * 20);
 
     char name[STRING_CAPACITY] = {0};
-    fgets(name, STRING_CAPACITY - 1, dbs);
-    while (name[0] != '\0') {
-        Database *ptr = process_database(name);
-        if(ptr == NULL) {
-            fprintf(stderr, "WARNING: Failed to process database %s", name);
-        } else {
-            if (container.len == container.cap) {
-                container.cap *= 2;
-                Database **grow = malloc(sizeof(Database*) * container.cap);
-                memcpy(grow, container.bases, sizeof(Database*) * container.len);
-                memset(grow + container.len, 0, sizeof(Database*) * container.len);
-                free(container.bases);
-                container.bases = grow;
-            }
-            container.bases[container.len] = ptr;
-            container.len ++;
+    while (fgets(name, STRING_CAPACITY, dbs) != NULL) {
+        size_t len = strlen(name);
+        if (name[len-1] == '\n')
+            name[len-1] = '\0';
+
+        Database * db = malloc(sizeof(Database));
+        if (db == NULL) {
+            fprintf(stderr, "ERROR: Failed to allocate memory for a database");
+            exit(1);
         }
-        fgets(name, STRING_CAPACITY - 1, dbs);
+        memset(db, 0, sizeof(Database));
+        strcpy(db->label, name);
+
+        if (container.len == container.cap) {
+            container.cap *= 2;
+            Database **grow = malloc(sizeof(Database*) * container.cap);
+            memcpy(grow, container.bases, sizeof(Database*) * container.len);
+            memset(grow + container.len, 0, sizeof(Database*) * container.len);
+            free(container.bases);
+            container.bases = grow;
+        }
+        container.bases[container.len] = db;
+        container.len ++;
     }
     pclose(dbs);
+
+    for (size_t i = 0; i < container.len; i++) {
+        process_database(container.bases[i]);
+        if (container.bases[i]->len == 0) {
+            free(container.bases[i]);
+            for(size_t r = i; r < container.len; r++) {
+                container.bases[r] = container.bases[r+1];
+            }
+            container.len --;
+            i --;
+        }
+    }
+
     // Postprocess database results to assign hotkeys
     assign_hotkeys(container);
     build_elements(container, index);
-
-    // cleanup
-    for(int i = 0; i < container.len; i++) {
-        Database* db = container.bases[i];
-        for(int j = 0; j < db->len; j++) {
-            free(db->entries[j]);
-        }
-        free(db);
-    }
-    free(container.bases);
 }
 
 void build_hopepage() {
-    FILE* index = fopen("index.html", "w");
-    if (index == NULL) {
-        fprintf(stderr, "ERROR: %s", strerror(errno));
-        exit(1);
-    }
+    /* FILE* index = fopen("index.html", "w"); */
+    /* if (index == NULL) { */
+    /*     fprintf(stderr, "ERROR: %s", strerror(errno)); */
+    /*     exit(1); */
+    /* } */
+    FILE* index = stdout;
     write_line(index, "<!doctype html>");
     write_line(index, "<html>");
     write_line(index, "  <head>");
@@ -353,7 +400,7 @@ void build_hopepage() {
     build_containers(index);
     write_line(index, "  </body>");
     write_line(index, "</html>");
-    fclose(index);
+    /* fclose(index); */
 }
 
 
